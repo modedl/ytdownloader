@@ -4,26 +4,34 @@ from pytube.exceptions import VideoUnavailable, RegexMatchError
 import os
 import uuid
 import json
-import time
 import datetime
+import time # Used implicitly via datetime for cleanup logic
+
+# --- Streamlit UI Configuration (MUST BE THE VERY FIRST STREAMLIT COMMAND) ---
+st.set_page_config(
+    page_title="Streamlit 'API' Endpoint (Simulated) with Auto-Cleanup",
+    page_icon="🤖",
+    layout="centered"
+)
 
 # --- Configuration ---
-DOWNLOAD_DIR = "temp_downloads" # Using 'temp_downloads' to emphasize transient nature
-CLEANUP_DELAY_MINUTES = 5 # Set to 5 minutes for file deletion
+DOWNLOAD_DIR = "temp_downloads" # Folder to store temporary downloads
+CLEANUP_DELAY_MINUTES = 5 # Files older than this will be deleted
 
 # Ensure the temporary download directory exists
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# --- Helper Function for Download ---
+# --- Helper Function for Downloading Videos ---
 def download_youtube_video_for_streamlit(url: str, resolution: str) -> tuple[str, str, str]:
     """
     Attempts to download a YouTube video to a temporary location.
-    Returns (file_path, video_title, actual_resolution_downloaded) or raises an exception.
+    Returns (file_path, video_title, actual_resolution_downloaded) upon success,
+    or raises an exception on failure.
     """
     try:
         yt = YouTube(url)
         
-        # Get progressive streams (video + audio combined)
+        # Filter for progressive streams (video and audio combined)
         progressive_streams = yt.streams.filter(progressive=True).order_by('resolution').desc()
 
         target_stream = None
@@ -32,6 +40,7 @@ def download_youtube_video_for_streamlit(url: str, resolution: str) -> tuple[str
                 target_stream = s
                 break
         
+        # Fallback: if exact resolution isn't found, get the highest available progressive stream
         if not target_stream:
             st.warning(f"Resolution '{resolution}' not directly available for '{yt.title}'. Attempting to download highest available progressive resolution.")
             target_stream = progressive_streams.first()
@@ -39,18 +48,18 @@ def download_youtube_video_for_streamlit(url: str, resolution: str) -> tuple[str
             if not target_stream:
                 raise ValueError("No progressive streams found for this video at any resolution.")
 
-        # Generate a unique filename to include timestamp for cleanup logic
+        # Generate a unique filename including a timestamp for cleanup purposes
         unique_id = uuid.uuid4().hex[:8] 
         safe_title = "".join([c for c in yt.title if c.isalnum() or c in (' ', '.', '_')]).strip()
-        safe_title = safe_title.replace(' ', '_')[:50]
+        safe_title = safe_title.replace(' ', '_')[:50] # Truncate title for shorter filenames
         
-        # Add a timestamp to the filename for cleanup
-        timestamp_str = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+        timestamp_str = datetime.datetime.now().strftime("%Y%m%d%H%M%S") # Current timestamp
         
         file_name = f"{safe_title}_{target_stream.resolution}_{timestamp_str}_{unique_id}.mp4"
         file_path = os.path.join(DOWNLOAD_DIR, file_name)
 
-        # Only download if not already in session's temp folder (unlikely with UUID)
+        # Download the video if it doesn't already exist in the temporary folder
+        # (Unlikely to exist due to UUID, but good practice)
         if not os.path.exists(file_path):
             st.info(f"Downloading '{yt.title}' at {target_stream.resolution}...")
             target_stream.download(output_path=DOWNLOAD_DIR, filename=file_name)
@@ -73,8 +82,8 @@ def download_youtube_video_for_streamlit(url: str, resolution: str) -> tuple[str
 # --- Automatic File Cleanup Function ---
 def cleanup_old_files():
     """
-    Deletes files in DOWNLOAD_DIR older than CLEANUP_DELAY_MINUTES.
-    This runs periodically when the Streamlit app reloads.
+    Deletes files in the DOWNLOAD_DIR that are older than CLEANUP_DELAY_MINUTES.
+    This function runs periodically whenever the Streamlit app reloads.
     """
     now = datetime.datetime.now()
     cutoff_time = now - datetime.timedelta(minutes=CLEANUP_DELAY_MINUTES)
@@ -87,22 +96,20 @@ def cleanup_old_files():
         for filename in os.listdir(DOWNLOAD_DIR):
             file_path = os.path.join(DOWNLOAD_DIR, filename)
             if os.path.isfile(file_path):
-                # Try to parse timestamp from filename, fallback to modification time
+                file_timestamp = None
                 try:
-                    # Filename format: safe_title_resolution_YYYYMMDDHHMMSS_uuid.mp4
+                    # Attempt to parse timestamp from filename (e.g., '..._YYYYMMDDHHMMSS_uuid.mp4')
                     parts = filename.split('_')
-                    if len(parts) >= 4: # Check if timestamp part exists
+                    # Expect at least 4 parts: title_res_timestamp_uuid.mp4
+                    if len(parts) >= 4: 
                         timestamp_str_in_name = parts[-2]
                         file_timestamp = datetime.datetime.strptime(timestamp_str_in_name, "%Y%m%d%H%M%S")
-                    else:
-                        # Fallback to file's modification time if timestamp not in name
-                        file_timestamp = datetime.datetime.fromtimestamp(os.path.getmtime(file_path))
-                        st.sidebar.warning(f"Could not parse timestamp from filename: {filename}. Using modification time.")
                 except Exception:
+                    # Fallback to file's modification time if timestamp not in name or parsing fails
                     file_timestamp = datetime.datetime.fromtimestamp(os.path.getmtime(file_path))
-                    st.sidebar.warning(f"Could not parse timestamp from filename: {filename}. Using modification time.")
+                    st.sidebar.warning(f"Could not parse timestamp from filename: {filename}. Using modification time for cleanup.")
 
-                if file_timestamp < cutoff_time:
+                if file_timestamp and file_timestamp < cutoff_time:
                     try:
                         os.remove(file_path)
                         st.sidebar.info(f"Cleaned: {filename}")
@@ -116,20 +123,13 @@ def cleanup_old_files():
         st.sidebar.info("No old files to clean up at this moment.")
     st.sidebar.markdown("---")
 
-# Run cleanup on every app reload
+# Run cleanup on every app reload, after st.set_page_config()
 cleanup_old_files()
 
-
-# --- Streamlit UI ---
-st.set_page_config(
-    page_title="Streamlit 'API' Endpoint (Simulated) with Auto-Cleanup",
-    page_icon="🤖",
-    layout="centered"
-)
-
+# --- Streamlit Application UI ---
 st.title("🤖 Streamlit 'API' Endpoint (Simulated)")
 st.markdown("This app simulates an API endpoint. Enter a YouTube URL to get a JSON response with a direct download link (for this session).")
-st.markdown(f"**Downloaded files will be automatically deleted from the server after {CLEANUP_DELAY_MINUTES} minutes** (on next app interaction/reload).")
+st.markdown(f"**Downloaded files will be automatically deleted from the server after {CLEANUP_DELAY_MINUTES} minutes** (triggered on app reloads/interactions).")
 st.markdown("---")
 
 video_url = st.text_input("🔗 Enter YouTube Video URL:", placeholder="e.g., example.com/?vid=youtube.com/watch")
@@ -149,7 +149,8 @@ if st.button("🔽 Generate Download Link (JSON)", use_container_width=True):
         with st.spinner("Processing request and generating download link..."):
             try:
                 # 1. Download the video locally
-                downloaded_file_path, video_title, actual_resolution_downloaded = download_youtube_video_for_streamlit(video_url, selected_resolution)
+                downloaded_file_path, video_title, actual_resolution_downloaded = \
+                    download_youtube_video_for_streamlit(video_url, selected_resolution)
                 
                 if not os.path.exists(downloaded_file_path):
                     st.error("Error: Video file was not created. Please try again.")
@@ -161,13 +162,12 @@ if st.button("🔽 Generate Download Link (JSON)", use_container_width=True):
                         "file_name": os.path.basename(downloaded_file_path),
                         "mime_type": "video/mp4",
                         "video_title": video_title,
-                        "resolution": actual_resolution_downloaded # Use actual downloaded resolution
+                        "resolution": actual_resolution_downloaded 
                     }
 
-                    # 3. Construct the JSON response object
-                    # The 'download_url' here is a placeholder/conceptual URL for Streamlit's internal handling.
-                    # A real API would return a direct public HTTP URL.
-                    
+                    # 3. Construct the JSON response object for display
+                    # The 'download_url' here is a conceptual URL for Streamlit's internal handling.
+                    # In a true API, this would be a direct public HTTP URL to the file.
                     json_response_content = {
                         "status": "success",
                         "video_title": video_title,
@@ -182,8 +182,8 @@ if st.button("🔽 Generate Download Link (JSON)", use_container_width=True):
 
             except (VideoUnavailable, RegexMatchError, ValueError):
                 st.session_state.download_info = None
-                # Errors are already displayed by the download function
-                pass
+                # Specific errors are already displayed by the download function, so no need to re-print.
+                pass 
             except Exception as e:
                 st.error(f"An unhandled error occurred during processing: {e}")
                 st.session_state.download_info = None
@@ -192,7 +192,7 @@ if st.button("🔽 Generate Download Link (JSON)", use_container_width=True):
 
 st.markdown("---")
 
-# Provide the actual download button if info is available in session_state
+# Provide the actual download button if download info is available in session_state
 if st.session_state.download_info:
     info = st.session_state.download_info
     if os.path.exists(info["file_path"]):
@@ -211,8 +211,8 @@ if st.session_state.download_info:
 st.markdown("---")
 st.markdown("### Important Notes on Streamlit 'API' Simulation:")
 st.markdown("""
--   **No True API Endpoint:** This Streamlit app does *not* provide a traditional REST API endpoint that other programs can hit.
--   **Human Interaction Required:** It requires a human user to interact with the Streamlit web interface.
+-   **No True API Endpoint:** This Streamlit app does *not* provide a traditional REST API endpoint (`http://your-server/download?url=...`) that other programs can hit to get a JSON response and a direct file link.
+-   **Human Interaction Required:** It relies on a human user to interact with the Streamlit web interface.
 -   **Session-Specific Downloads:** The `download_url` in the JSON is purely conceptual for this demo. The actual file download happens via the `st.download_button`, which serves the file *to the current browser session*.
 -   **Cleanup Trigger:** File cleanup happens when the Streamlit app's script reruns (e.g., when you interact with the app or refresh the page).
 """)
