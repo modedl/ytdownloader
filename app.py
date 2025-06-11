@@ -1,6 +1,6 @@
 import streamlit as st
-from pytube import YouTube
-from pytube.exceptions import VideoUnavailable, RegexMatchError
+from pytubefix import YouTube
+from pytubefix.exceptions import VideoUnavailable, RegexMatchError
 import os
 import uuid
 import json
