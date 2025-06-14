@@ -136,7 +136,7 @@ def process_youtube_streams(url: str) -> tuple[str, list[dict], str]:
                 # or just acknowledge the download was attempted.
                 
                 # For the purpose of showing *what would be returned if it worked*:
-                hypothetical_server_url = f"https://your.streamlit.app/downloaded_videos/{session_id}/{download_filename}" # This path does not exist in Streamlit
+                hypothetical_server_url = f"https://modsbots-api.streamlit.app/downloaded_videos/{session_id}/{download_filename}" # This path does not exist in Streamlit
                 
                 downloaded_file_urls.append({
                     "type": dl_info["type_label"],
