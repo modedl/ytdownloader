@@ -7,7 +7,7 @@ import datetime
 # --- Streamlit UI Configuration (MUST BE THE VERY FIRST STREAMLIT COMMAND) ---
 # Set a single, consistent layout here. 'wide' is good for displaying lists of links or JSON.
 st.set_page_config(
-    page_title="Streamlit YouTube Direct Link Extractor",
+    page_title="Streamlit YouTube Direct Link Extractoeerrer",
     page_icon="🔗",
     layout="wide"
 )
