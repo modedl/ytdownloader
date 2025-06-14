@@ -3,6 +3,7 @@ from pytubefix import YouTube
 from pytubefix.exceptions import VideoUnavailable, RegexMatchError
 import json
 import datetime
+import sys # For debug printing to stderr
 
 # --- Streamlit UI Configuration (MUST BE THE VERY FIRST STREAMLIT COMMAND) ---
 st.set_page_config(
@@ -23,27 +24,58 @@ def get_youtube_stream_links(url: str) -> tuple[str, list[dict]]:
         
         video_title = yt.title
         
-        # Get ALL streams (both progressive and adaptive)
-        # Order by resolution descending, then by itag (a way to ensure consistent order)
+        # Get ALL streams available for the video
+        # Order by resolution descending, then by itag for consistent sorting
         all_streams = yt.streams.order_by('resolution').desc().order_by('itag')
         
         stream_details = []
+        
+        # --- DEBUGGING: Print all raw streams found by pytubefix ---
+        st.sidebar.subheader("Raw Streams (for Debugging):")
+        for i, s in enumerate(all_streams):
+            st.sidebar.markdown(f"**Stream {i+1}:**")
+            st.sidebar.code(f"Is Progressive: {s.is_progressive}, Type: {s.type}, MIME: {s.mime_type}, Res: {s.resolution}, VCodec: {s.video_codec}, ACodec: {s.audio_codec}, ITAG: {s.itag}, URL: {s.url is not None}")
+            # You can also print to stderr which often goes to the console/server logs
+            print(f"DEBUG (Raw Stream {i+1}): Progressive={s.is_progressive}, Type={s.type}, MIME={s.mime_type}, Res={s.resolution}, VCodec={s.video_codec}, ACodec={s.audio_codec}, ITAG={s.itag}, Has URL={s.url is not None}", file=sys.stderr)
+        st.sidebar.markdown("---")
+        # --- END DEBUGGING ---
+
+
         for s in all_streams:
             if s.url: # Ensure the stream has a direct URL
-                stream_type = "progressive (video+audio)" if s.is_progressive else \
-                              ("adaptive (video-only)" if s.type == "video" else "adaptive (audio-only)")
-                
-                stream_details.append({
-                    "type": stream_type,
-                    "resolution": s.resolution if s.type == "video" else "N/A", # Only video streams have resolution
-                    "fps": s.fps if s.type == "video" else "N/A",
-                    "vcodec": s.video_codec, # Video codec
-                    "acodec": s.audio_codec, # Audio codec
+                stream_dict = {
+                    "itag": s.itag,
                     "mime_type": s.mime_type,
                     "filesize_mb": round(s.filesize / (1024 * 1024), 2) if s.filesize else None,
-                    "itag": s.itag,
                     "url": s.url # This is the direct download URL
-                })
+                }
+
+                if s.is_progressive:
+                    stream_dict["type"] = "progressive (video+audio)"
+                    stream_dict["resolution"] = s.resolution
+                    stream_dict["fps"] = s.fps
+                    stream_dict["vcodec"] = s.video_codec
+                    stream_dict["acodec"] = s.audio_codec
+                elif s.type == "video": # Adaptive video-only
+                    stream_dict["type"] = "adaptive (video-only)"
+                    stream_dict["resolution"] = s.resolution
+                    stream_dict["fps"] = s.fps
+                    stream_dict["vcodec"] = s.video_codec
+                    stream_dict["acodec"] = None # No audio codec for video-only
+                elif s.type == "audio": # Adaptive audio-only
+                    stream_dict["type"] = "adaptive (audio-only)"
+                    stream_dict["resolution"] = "N/A" # No resolution for audio
+                    stream_dict["fps"] = "N/A"      # No fps for audio
+                    stream_dict["vcodec"] = None # No video codec for audio-only
+                    stream_dict["acodec"] = s.audio_codec
+                else:
+                    stream_dict["type"] = f"other ({s.type})" # Fallback for unexpected types
+                    stream_dict["resolution"] = "N/A"
+                    stream_dict["fps"] = "N/A"
+                    stream_dict["vcodec"] = s.video_codec
+                    stream_dict["acodec"] = s.audio_codec
+                
+                stream_details.append(stream_dict)
         
         if not stream_details:
             raise ValueError("No stream links found for this video.")
@@ -105,7 +137,7 @@ else:
 
     video_url = st.text_input(
         "🔗 Enter YouTube Video URL:",
-        placeholder="e.g., https://www.youtube.com/channel/UCV8e2g4IWQqK71bbzGDEI4Q5"
+        placeholder="e.g., https://www.youtube.com/channel/UCV8e2g4IWQqK71bbzGDEI4Q7"
     )
 
     if st.button("🔽 Get All Direct Links", use_container_width=True):
@@ -120,7 +152,8 @@ else:
                     st.info("""
                         **Understanding the Links:**
                         - **Progressive (video+audio):** These streams contain both video and audio and can be played directly.
-                        - **Adaptive (video-only/audio-only):** These streams contain *only* video or *only* audio. To get a full video, you'll need to download a video-only stream AND an audio-only stream, then combine them using a tool like `ffmpeg`.
+                        - **Adaptive (video-only):** These streams contain *only* video. To get a full video, you'll need to download a video-only stream AND an audio-only stream, then combine them using a tool like `ffmpeg`.
+                        - **Adaptive (audio-only):** These streams contain *only* audio. Useful for extracting soundtracks or combining with video-only streams.
                         - **Link Expiration:** All direct URLs provided by YouTube are typically time-limited and may expire after a few hours.
                     """)
 
