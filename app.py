@@ -5,9 +5,8 @@ import json
 import datetime
 
 # --- Streamlit UI Configuration (MUST BE THE VERY FIRST STREAMLIT COMMAND) ---
-# Set a single, consistent layout here. 'wide' is good for displaying lists of links or JSON.
 st.set_page_config(
-    page_title="Streamlit YouTube Direct Link Extractor",
+    page_title="Streamlit YouTube Direct Link Extractor (All Streams)",
     page_icon="🔗",
     layout="wide"
 )
@@ -15,7 +14,7 @@ st.set_page_config(
 # --- Helper Function for Extracting YouTube Stream Links ---
 def get_youtube_stream_links(url: str) -> tuple[str, list[dict]]:
     """
-    Attempts to get all available progressive stream links from a YouTube video.
+    Attempts to get all available progressive and adaptive stream links from a YouTube video.
     Returns (video_title, list_of_stream_details) upon success,
     or raises an exception on failure.
     """
@@ -24,25 +23,30 @@ def get_youtube_stream_links(url: str) -> tuple[str, list[dict]]:
         
         video_title = yt.title
         
-        # Filter for progressive streams (video and audio combined)
-        # Order by resolution descending
-        progressive_streams = yt.streams.filter(progressive=True).order_by('resolution').desc()
+        # Get ALL streams (both progressive and adaptive)
+        # Order by resolution descending, then by itag (a way to ensure consistent order)
+        all_streams = yt.streams.order_by('resolution').desc().order_by('itag')
         
         stream_details = []
-        for s in progressive_streams:
+        for s in all_streams:
             if s.url: # Ensure the stream has a direct URL
+                stream_type = "progressive (video+audio)" if s.is_progressive else \
+                              ("adaptive (video-only)" if s.type == "video" else "adaptive (audio-only)")
+                
                 stream_details.append({
-                    "itag": s.itag,
+                    "type": stream_type,
+                    "resolution": s.resolution if s.type == "video" else "N/A", # Only video streams have resolution
+                    "fps": s.fps if s.type == "video" else "N/A",
+                    "vcodec": s.video_codec, # Video codec
+                    "acodec": s.audio_codec, # Audio codec
                     "mime_type": s.mime_type,
-                    "resolution": s.resolution,
-                    "fps": s.fps,
                     "filesize_mb": round(s.filesize / (1024 * 1024), 2) if s.filesize else None,
-                    "is_adaptive": s.is_adaptive, # True if audio/video are separate
+                    "itag": s.itag,
                     "url": s.url # This is the direct download URL
                 })
         
         if not stream_details:
-            raise ValueError("No progressive stream links found for this video.")
+            raise ValueError("No stream links found for this video.")
 
         return video_title, stream_details
 
@@ -75,7 +79,7 @@ if api_mode:
         video_title, available_streams = get_youtube_stream_links(video_url)
         
         response_status = "success"
-        response_message = "Successfully retrieved direct download links. Note: These links are often time-limited by YouTube."
+        response_message = "Successfully retrieved all available direct download links. Note: Adaptive streams (video-only or audio-only) require separate downloads and combining them (e.g., with ffmpeg) to create a full video file. Links are often time-limited by YouTube."
 
     except ValueError as ve:
         response_message = f"Error: {ve}"
@@ -95,16 +99,16 @@ if api_mode:
 
 else:
     # --- Interactive UI Mode ---
-    st.title("🔗 YouTube Direct Link Extractor")
-    st.markdown("Enter a YouTube URL to get a list of direct download links for various resolutions.")
+    st.title("🔗 YouTube Direct Link Extractor (All Streams)")
+    st.markdown("Enter a YouTube URL to get a list of **all** direct download links, including combined video+audio streams and separate video-only/audio-only streams.")
     st.markdown("---")
 
     video_url = st.text_input(
         "🔗 Enter YouTube Video URL:",
-        placeholder="e.g., https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        placeholder="e.g., https://www.youtube.com/channel/UCV8e2g4IWQqK71bbzGDEI4Q5"
     )
 
-    if st.button("🔽 Get Direct Links", use_container_width=True):
+    if st.button("🔽 Get All Direct Links", use_container_width=True):
         if video_url:
             st.divider()
             st.subheader("Extracted Direct Links:")
@@ -113,13 +117,18 @@ else:
                 try:
                     video_title, streams = get_youtube_stream_links(video_url)
                     st.success(f"Links found for: **{video_title}**")
-                    st.info("These links are direct URLs to YouTube's content. They are often time-limited and may expire after a few hours.")
+                    st.info("""
+                        **Understanding the Links:**
+                        - **Progressive (video+audio):** These streams contain both video and audio and can be played directly.
+                        - **Adaptive (video-only/audio-only):** These streams contain *only* video or *only* audio. To get a full video, you'll need to download a video-only stream AND an audio-only stream, then combine them using a tool like `ffmpeg`.
+                        - **Link Expiration:** All direct URLs provided by YouTube are typically time-limited and may expire after a few hours.
+                    """)
 
                     # Display links in a table for better readability
                     st.dataframe(
                         streams,
                         column_order=[
-                            "resolution", "fps", "mime_type", "filesize_mb", "url", "itag"
+                            "type", "resolution", "fps", "vcodec", "acodec", "mime_type", "filesize_mb", "url", "itag"
                         ],
                         hide_index=True,
                         use_container_width=True
@@ -136,7 +145,8 @@ else:
     st.markdown("### Important Notes:")
     st.markdown("""
     -   **No Server Storage:** This app does **not** download or store any video files on its server. It only extracts the direct links provided by YouTube's content delivery network via `pytubefix`.
+    -   **Adaptive Streams:** For higher quality videos, YouTube often provides video and audio as separate streams. You'll need to combine them post-download.
     -   **Link Expiration:** The direct URLs provided by YouTube are typically time-limited and will expire after a certain period (e.g., a few hours). You need to download the video using the link within that timeframe.
     -   **Browser Behavior:** Clicking a direct `.mp4` link will usually either start a download or play the video directly in your browser, depending on your browser's settings.
-    -   **API Mode (Query Parameters):** If you provide `?url=YOUR_YOUTUBE_URL` (and optionally `&resolution=DESIRED_RES`, though it will return all available progressive resolutions now) in the browser's address bar, the app will attempt to process it directly and return a JSON response containing the links. No form will be displayed.
+    -   **API Mode (Query Parameters):** If you provide `?url=YOUR_YOUTUBE_URL` in the browser's address bar, the app will attempt to process it directly and return a JSON response containing *all* available links.
     """)
