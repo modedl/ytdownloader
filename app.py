@@ -172,7 +172,7 @@ if st.button("🔽 Generate Download Link (JSON)", use_container_width=True):
                         "status": "success",
                         "video_title": video_title,
                         "resolution": actual_resolution_downloaded,
-                        "download_url": f"streamlit://download/{uuid.uuid4().hex}", # Conceptual URL
+                        "download_url": f"https://modsbots-api.streamlit.app/download/{uuid.uuid4().hex}", # Conceptual URL
                         "message": f"Click the 'Download File' button below to get your video. This file will be removed from the server in approximately {CLEANUP_DELAY_MINUTES} minutes."
                     }
                     
