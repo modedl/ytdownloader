@@ -1,142 +1,218 @@
 import streamlit as st
 from pytubefix import YouTube
 from pytubefix.exceptions import VideoUnavailable, RegexMatchError
+import os
+import uuid
 import json
 import datetime
+import time # Used implicitly via datetime for cleanup logic
 
 # --- Streamlit UI Configuration (MUST BE THE VERY FIRST STREAMLIT COMMAND) ---
-# Set a single, consistent layout here. 'wide' is good for displaying lists of links or JSON.
 st.set_page_config(
-    page_title="Streamlit YouTube Direct Link Extractoeerrer",
-    page_icon="🔗",
-    layout="wide"
+    page_title="Streamlit 'API' Endpoint (Simulated) with Auto-Cleanup",
+    page_icon="🤖",
+    layout="centered"
 )
 
-# --- Helper Function for Extracting YouTube Stream Links ---
-def get_youtube_stream_links(url: str) -> tuple[str, list[dict]]:
+# --- Configuration ---
+DOWNLOAD_DIR = "temp_downloads" # Folder to store temporary downloads
+CLEANUP_DELAY_MINUTES = 5 # Files older than this will be deleted
+
+# Ensure the temporary download directory exists
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+# --- Helper Function for Downloading Videos ---
+def download_youtube_video_for_streamlit(url: str, resolution: str) -> tuple[str, str, str]:
     """
-    Attempts to get all available progressive stream links from a YouTube video.
-    Returns (video_title, list_of_stream_details) upon success,
+    Attempts to download a YouTube video to a temporary location.
+    Returns (file_path, video_title, actual_resolution_downloaded) upon success,
     or raises an exception on failure.
     """
     try:
         yt = YouTube(url)
         
-        video_title = yt.title
-        
         # Filter for progressive streams (video and audio combined)
-        # Order by resolution descending
         progressive_streams = yt.streams.filter(progressive=True).order_by('resolution').desc()
-        
-        stream_details = []
-        for s in progressive_streams:
-            if s.url: # Ensure the stream has a direct URL
-                stream_details.append({
-                    "itag": s.itag,
-                    "mime_type": s.mime_type,
-                    "resolution": s.resolution,
-                    "fps": s.fps,
-                    "filesize_mb": round(s.filesize / (1024 * 1024), 2) if s.filesize else None,
-                    "is_adaptive": s.is_adaptive, # True if audio/video are separate
-                    "url": s.url # This is the direct download URL
-                })
-        
-        if not stream_details:
-            raise ValueError("No progressive stream links found for this video.")
 
-        return video_title, stream_details
+        target_stream = None
+        for s in progressive_streams:
+            if s.resolution == resolution:
+                target_stream = s
+                break
+        
+        # Fallback: if exact resolution isn't found, get the highest available progressive stream
+        if not target_stream:
+            st.warning(f"Resolution '{resolution}' not directly available for '{yt.title}'. Attempting to download highest available progressive resolution.")
+            target_stream = progressive_streams.first()
+            
+            if not target_stream:
+                raise ValueError("No progressive streams found for this video at any resolution.")
+
+        # Generate a unique filename including a timestamp for cleanup purposes
+        unique_id = uuid.uuid4().hex[:8] 
+        safe_title = "".join([c for c in yt.title if c.isalnum() or c in (' ', '.', '_')]).strip()
+        safe_title = safe_title.replace(' ', '_')[:50] # Truncate title for shorter filenames
+        
+        timestamp_str = datetime.datetime.now().strftime("%Y%m%d%H%M%S") # Current timestamp
+        
+        file_name = f"{safe_title}_{target_stream.resolution}_{timestamp_str}_{unique_id}.mp4"
+        file_path = os.path.join(DOWNLOAD_DIR, file_name)
+
+        # Download the video if it doesn't already exist in the temporary folder
+        # (Unlikely to exist due to UUID, but good practice)
+        if not os.path.exists(file_path):
+            st.info(f"Downloading '{yt.title}' at {target_stream.resolution}...")
+            target_stream.download(output_path=DOWNLOAD_DIR, filename=file_name)
+            st.success(f"Downloaded '{yt.title}' temporarily to: {file_path}")
+        else:
+            st.info(f"Video '{file_name}' already exists in temporary folder for this session.")
+
+        return file_path, yt.title, target_stream.resolution
 
     except VideoUnavailable:
-        raise ValueError("The YouTube video is unavailable or private.")
+        st.error("Error: The YouTube video is unavailable or private.")
+        raise
     except RegexMatchError:
-        raise ValueError("Invalid YouTube URL format. Please check the URL.")
+        st.error("Error: Invalid YouTube URL format. Please check the URL.")
+        raise
     except Exception as e:
-        raise Exception(f"An unexpected error occurred: {e}")
+        st.error(f"An unexpected error occurred during download: {e}")
+        raise
 
-# --- No cleanup function needed as no files are downloaded/stored ---
-
-# --- Check for 'url' parameter in query string for "API" mode ---
-query_url = st.query_params.get("url")
-
-# Determine if we are in "API" mode (URL provided in query params)
-api_mode = bool(query_url)
-
-if api_mode:
-    # --- "API" Mode: Direct JSON Response ---
-    video_url = query_url
+# --- Automatic File Cleanup Function ---
+def cleanup_old_files():
+    """
+    Deletes files in the DOWNLOAD_DIR that are older than CLEANUP_DELAY_MINUTES.
+    This function runs periodically whenever the Streamlit app reloads.
+    """
+    now = datetime.datetime.now()
+    cutoff_time = now - datetime.timedelta(minutes=CLEANUP_DELAY_MINUTES)
     
-    response_status = "error"
-    response_message = "An unknown error occurred."
-    video_title = "N/A"
-    available_streams = []
-
-    try:
-        # Get all stream links
-        video_title, available_streams = get_youtube_stream_links(video_url)
-        
-        response_status = "success"
-        response_message = "Successfully retrieved direct download links. Note: These links are often time-limited by YouTube."
-
-    except ValueError as ve:
-        response_message = f"Error: {ve}"
-    except Exception as e:
-        response_message = f"An unexpected error occurred: {e}"
-
-    json_response = {
-        "status": response_status,
-        "video_title": video_title,
-        "available_streams": available_streams, # List of dictionaries with stream details
-        "message": response_message,
-        "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z"
-    }
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Automatic Cleanup Status:")
+    cleaned_count = 0
     
-    st.json(json_response)
-    st.stop() # Stop further execution to only show the JSON
-
-else:
-    # --- Interactive UI Mode ---
-    st.title("🔗 YouTube Direct Link Extractor")
-    st.markdown("Enter a YouTube URL to get a list of direct download links for various resolutions.")
-    st.markdown("---")
-
-    video_url = st.text_input(
-        "🔗 Enter YouTube Video URL:",
-        placeholder="e.g., https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-    )
-
-    if st.button("🔽 Get Direct Links", use_container_width=True):
-        if video_url:
-            st.divider()
-            st.subheader("Extracted Direct Links:")
-            
-            with st.spinner("Retrieving video information and direct links..."):
+    if os.path.exists(DOWNLOAD_DIR):
+        for filename in os.listdir(DOWNLOAD_DIR):
+            file_path = os.path.join(DOWNLOAD_DIR, filename)
+            if os.path.isfile(file_path):
+                file_timestamp = None
                 try:
-                    video_title, streams = get_youtube_stream_links(video_url)
-                    st.success(f"Links found for: **{video_title}**")
-                    st.info("These links are direct URLs to YouTube's content. They are often time-limited and may expire after a few hours.")
+                    # Attempt to parse timestamp from filename (e.g., '..._YYYYMMDDHHMMSS_uuid.mp4')
+                    parts = filename.split('_')
+                    # Expect at least 4 parts: title_res_timestamp_uuid.mp4
+                    if len(parts) >= 4: 
+                        timestamp_str_in_name = parts[-2]
+                        file_timestamp = datetime.datetime.strptime(timestamp_str_in_name, "%Y%m%d%H%M%S")
+                except Exception:
+                    # Fallback to file's modification time if timestamp not in name or parsing fails
+                    file_timestamp = datetime.datetime.fromtimestamp(os.path.getmtime(file_path))
+                    st.sidebar.warning(f"Could not parse timestamp from filename: {filename}. Using modification time for cleanup.")
 
-                    # Display links in a table for better readability
-                    st.dataframe(
-                        streams,
-                        column_order=[
-                            "resolution", "fps", "mime_type", "filesize_mb", "url", "itag"
-                        ],
-                        hide_index=True,
-                        use_container_width=True
-                    )
+                if file_timestamp and file_timestamp < cutoff_time:
+                    try:
+                        os.remove(file_path)
+                        st.sidebar.info(f"Cleaned: {filename}")
+                        cleaned_count += 1
+                    except Exception as e:
+                        st.sidebar.error(f"Error deleting {filename}: {e}")
+    
+    if cleaned_count > 0:
+        st.sidebar.success(f"Cleaned up {cleaned_count} old files.")
+    else:
+        st.sidebar.info("No old files to clean up at this moment.")
+    st.sidebar.markdown("---")
 
-                except ValueError as ve:
-                    st.error(f"Error: {ve}")
-                except Exception as e:
-                    st.error(f"An unhandled error occurred: {e}")
-        else:
-            st.warning("Please enter a YouTube video URL.")
+# Run cleanup on every app reload, after st.set_page_config()
+cleanup_old_files()
 
-    st.markdown("---")
-    st.markdown("### Important Notes:")
-    st.markdown("""
-    -   **No Server Storage:** This app does **not** download or store any video files on its server. It only extracts the direct links provided by YouTube's content delivery network via `pytubefix`.
-    -   **Link Expiration:** The direct URLs provided by YouTube are typically time-limited and will expire after a certain period (e.g., a few hours). You need to download the video using the link within that timeframe.
-    -   **Browser Behavior:** Clicking a direct `.mp4` link will usually either start a download or play the video directly in your browser, depending on your browser's settings.
-    -   **API Mode (Query Parameters):** If you provide `?url=YOUR_YOUTUBE_URL` (and optionally `&resolution=DESIRED_RES`, though it will return all available progressive resolutions now) in the browser's address bar, the app will attempt to process it directly and return a JSON response containing the links. No form will be displayed.
-    """)
+# --- Streamlit Application UI ---
+st.title("🤖 Streamlit 'API' Endpoint (Simulated)")
+st.markdown("This app simulates an API endpoint. Enter a YouTube URL to get a JSON response with a direct download link (for this session).")
+st.markdown(f"**Downloaded files will be automatically deleted from the server after {CLEANUP_DELAY_MINUTES} minutes** (triggered on app reloads/interactions).")
+st.markdown("---")
+
+video_url = st.text_input("🔗 Enter YouTube Video URL:", placeholder="e.g., example.com/?vid=youtube.com/watch")
+
+resolutions = ['1080p', '720p', '480p', '360p', '240p', '144p']
+selected_resolution = st.selectbox("🎯 Select Desired Resolution:", resolutions, index=1)
+
+# Initialize session state to store the generated download link and file path
+if 'download_info' not in st.session_state:
+    st.session_state.download_info = None
+
+if st.button("🔽 Generate Download Link (JSON)", use_container_width=True):
+    if video_url:
+        st.divider()
+        st.subheader("API Response Simulation:")
+        
+        with st.spinner("Processing request and generating download link..."):
+            try:
+                # 1. Download the video locally
+                downloaded_file_path, video_title, actual_resolution_downloaded = \
+                    download_youtube_video_for_streamlit(video_url, selected_resolution)
+                
+                if not os.path.exists(downloaded_file_path):
+                    st.error("Error: Video file was not created. Please try again.")
+                    st.session_state.download_info = None
+                else:
+                    # 2. Store info in session state for st.download_button
+                    st.session_state.download_info = {
+                        "file_path": downloaded_file_path,
+                        "file_name": os.path.basename(downloaded_file_path),
+                        "mime_type": "video/mp4",
+                        "video_title": video_title,
+                        "resolution": actual_resolution_downloaded 
+                    }
+
+                    # 3. Construct the JSON response object for display
+                    # The 'download_url' here is a conceptual URL for Streamlit's internal handling.
+                    # In a true API, this would be a direct public HTTP URL to the file.
+                    json_response_content = {
+                        "status": "success",
+                        "video_title": video_title,
+                        "resolution": actual_resolution_downloaded,
+                        "download_url": f"streamlit://download/{uuid.uuid4().hex}", # Conceptual URL
+                        "message": f"Click the 'Download File' button below to get your video. This file will be removed from the server in approximately {CLEANUP_DELAY_MINUTES} minutes."
+                    }
+                    
+                    # 4. Display the JSON response
+                    st.json(json_response_content)
+                    st.success("JSON response generated. Find the 'Download File' button below.")
+
+            except (VideoUnavailable, RegexMatchError, ValueError):
+                st.session_state.download_info = None
+                # Specific errors are already displayed by the download function, so no need to re-print.
+                pass 
+            except Exception as e:
+                st.error(f"An unhandled error occurred during processing: {e}")
+                st.session_state.download_info = None
+    else:
+        st.warning("Please enter a YouTube video URL.")
+
+st.markdown("---")
+
+# Provide the actual download button if download info is available in session_state
+if st.session_state.download_info:
+    info = st.session_state.download_info
+    if os.path.exists(info["file_path"]):
+        with open(info["file_path"], "rb") as file:
+            st.download_button(
+                label=f"⬇️ Download {info['video_title']} ({info['resolution']})",
+                data=file,
+                file_name=info["file_name"],
+                mime=info["mime_type"],
+                use_container_width=True
+            )
+        st.info(f"This file is temporarily stored on the server and will be deleted after {CLEANUP_DELAY_MINUTES} minutes.")
+    else:
+        st.error("Downloaded file not found. Please regenerate the link.")
+
+st.markdown("---")
+st.markdown("### Important Notes on Streamlit 'API' Simulation:")
+st.markdown("""
+-   **No True API Endpoint:** This Streamlit app does *not* provide a traditional REST API endpoint (`http://your-server/download?url=...`) that other programs can hit to get a JSON response and a direct file link.
+-   **Human Interaction Required:** It relies on a human user to interact with the Streamlit web interface.
+-   **Session-Specific Downloads:** The `download_url` in the JSON is purely conceptual for this demo. The actual file download happens via the `st.download_button`, which serves the file *to the current browser session*.
+-   **Cleanup Trigger:** File cleanup happens when the Streamlit app's script reruns (e.g., when you interact with the app or refresh the page).
+""")
