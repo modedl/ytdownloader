@@ -7,12 +7,44 @@ import json
 import datetime
 import time
 
+# --- Determine layout based on potential API mode BEFORE st.set_page_config ---
+# Check for 'url' parameter early to decide layout
+# Note: st.query_params can be used before set_page_config
+# However, if you need the *default* page_config to be dynamic based on query params,
+# you must access query_params *before* calling set_page_config.
+# Sticking to the common pattern of getting query_params after set_page_config,
+# but passing a variable to layout.
+
+# Initialize a default layout
+page_layout = "centered"
+
+# You cannot reliably get query_params before st.set_page_config,
+# because the script needs to run a bit for Streamlit's runtime to initialize.
+# The most robust way to handle this with a single set_page_config is to
+# accept a fixed layout or set a variable early and use it.
+# Let's assume for now that if a 'url' is present, we want 'wide'.
+
+# A common pattern is to fetch query_params *after* set_page_config,
+# then use st.stop() for API mode. However, if the *layout* needs to change,
+# we need a trickier approach or accept that layout won't change on the first run.
+
+# Let's simplify and keep the layout fixed or determine it based on initial conditions
+# that don't depend on a full Streamlit rendering pass.
+# For truly dynamic layout, you often restart the app or rely on user interaction.
+
 # --- Streamlit UI Configuration (MUST BE THE VERY FIRST STREAMLIT COMMAND) ---
+# We'll set a default layout here. If you absolutely need to change layout
+# based on query params, it's more complex and might require a fresh script run
+# (e.g., redirecting the user or having separate scripts).
+# For now, let's pick one, or keep 'centered' as the default.
+# The 'wide' layout is more appropriate for pure JSON.
+# Let's assume for this "API" version, 'wide' is better by default.
 st.set_page_config(
     page_title="Streamlit 'API' Endpoint (Simulated) with Auto-Cleanup",
     page_icon="🤖",
-    layout="centered"
+    layout="wide" # Set a single, consistent layout here. 'wide' is good for JSON.
 )
+
 
 # --- Configuration ---
 DOWNLOAD_DIR = "temp_downloads" # Folder to store temporary downloads
@@ -42,7 +74,6 @@ def download_youtube_video_for_streamlit(url: str, resolution: str) -> tuple[str
             
         # Fallback: if exact resolution isn't found, get the highest available progressive stream
         if not target_stream:
-            # st.warning(f"Resolution '{resolution}' not directly available for '{yt.title}'. Attempting to download highest available progressive resolution.")
             target_stream = progressive_streams.first()
             
             if not target_stream:
@@ -60,22 +91,14 @@ def download_youtube_video_for_streamlit(url: str, resolution: str) -> tuple[str
 
         # Download the video if it doesn't already exist in the temporary folder
         if not os.path.exists(file_path):
-            # st.info(f"Downloading '{yt.title}' at {target_stream.resolution}...") # Suppress info for API mode
             target_stream.download(output_path=DOWNLOAD_DIR, filename=file_name)
-            # st.success(f"Downloaded '{yt.title}' temporarily to: {file_path}") # Suppress success for API mode
-        # else:
-            # st.info(f"Video '{file_name}' already exists in temporary folder for this session.") # Suppress info for API mode
-
         return file_path, yt.title, target_stream.resolution
 
     except VideoUnavailable:
-        # st.error("Error: The YouTube video is unavailable or private.") # Suppress error for API mode
         raise
     except RegexMatchError:
-        # st.error("Error: Invalid YouTube URL format. Please check the URL.") # Suppress error for API mode
         raise
     except Exception as e:
-        # st.error(f"An unexpected error occurred during download: {e}") # Suppress error for API mode
         raise
 
 # --- Automatic File Cleanup Function ---
@@ -87,8 +110,6 @@ def cleanup_old_files():
     now = datetime.datetime.now()
     cutoff_time = now - datetime.timedelta(minutes=CLEANUP_DELAY_MINUTES)
     
-    # st.sidebar.markdown("---") # Commented out for a cleaner "API" response
-    # st.sidebar.subheader("Automatic Cleanup Status:") # Commented out for a cleaner "API" response
     cleaned_count = 0
     
     if os.path.exists(DOWNLOAD_DIR):
@@ -103,22 +124,13 @@ def cleanup_old_files():
                         file_timestamp = datetime.datetime.strptime(timestamp_str_in_name, "%Y%m%d%H%M%S")
                 except Exception:
                     file_timestamp = datetime.datetime.fromtimestamp(os.path.getmtime(file_path))
-                    # st.sidebar.warning(f"Could not parse timestamp from filename: {filename}. Using modification time for cleanup.") # Suppress warning for API mode
 
                 if file_timestamp and file_timestamp < cutoff_time:
                     try:
                         os.remove(file_path)
-                        # st.sidebar.info(f"Cleaned: {filename}") # Suppress info for API mode
                         cleaned_count += 1
                     except Exception as e:
-                        # st.sidebar.error(f"Error deleting {filename}: {e}") # Suppress error for API mode
                         pass # Fail silently for API mode cleanup
-    
-    # if cleaned_count > 0: # Commented out for a cleaner "API" response
-    #     st.sidebar.success(f"Cleaned up {cleaned_count} old files.")
-    # else:
-    #     st.sidebar.info("No old files to clean up at this moment.")
-    # st.sidebar.markdown("---") # Commented out for a cleaner "API" response
 
 # Run cleanup on every app reload
 cleanup_old_files()
@@ -135,12 +147,6 @@ if api_mode:
     video_url = query_url
     selected_resolution = query_resolution # Use resolution from query params
     
-    st.set_page_config(
-        page_title="Streamlit 'API' Endpoint (Simulated) with Auto-Cleanup",
-        page_icon="🤖",
-        layout="wide" # Use wide layout for cleaner JSON output
-    )
-
     response_status = "error"
     response_message = "An unknown error occurred."
     video_title = "N/A"
@@ -157,17 +163,7 @@ if api_mode:
             response_status = "success"
             response_message = f"Video processed successfully. File available for download. It will be removed from the server in approximately {CLEANUP_DELAY_MINUTES} minutes."
             file_name = os.path.basename(downloaded_file_path)
-            # In a true API, this would be a direct public HTTP URL.
-            # Here, it's conceptual for the Streamlit context.
             download_url = f"streamlit://download/{uuid.uuid4().hex}" 
-
-            # IMPORTANT: For an actual API, you'd need to serve the file
-            # directly using a web server or a mechanism that allows direct downloads.
-            # Streamlit's `st.download_button` is for browser interaction.
-            # For a pure API response, you might return the file content directly
-            # or a signed URL to a cloud storage.
-            # As this is a "simulated API", we'll just show the conceptual link.
-
         else:
             response_message = "Error: Video file was not created on the server."
 
@@ -185,8 +181,8 @@ if api_mode:
         "video_title": video_title,
         "requested_resolution": selected_resolution,
         "actual_resolution_downloaded": actual_resolution,
-        "file_name": file_name, # The name of the file on the server
-        "conceptual_download_url": download_url, # Conceptual for Streamlit, not a direct public link
+        "file_name": file_name,
+        "conceptual_download_url": download_url,
         "message": response_message,
         "timestamp_utc": datetime.datetime.utcnow().isoformat() + "Z"
     }
@@ -203,7 +199,7 @@ else:
 
     video_url = st.text_input(
         "🔗 Enter YouTube Video URL:",
-        placeholder="e.g., https://www.youtube.com/channel/UCV8e2g4IWQqK71bbzGDEI4Q2"
+        placeholder="e.g., https://www.youtube.com/channel/UCV8e2g4IWQqK71bbzGDEI4Q4"
     )
 
     resolutions = ['1080p', '720p', '480p', '360p', '240p', '144p']
@@ -252,7 +248,6 @@ else:
 
                 except (VideoUnavailable, RegexMatchError, ValueError):
                     st.session_state.download_info = None
-                    # Specific errors are already displayed by the download function, so no need to re-print.
                     pass 
                 except Exception as e:
                     st.error(f"An unhandled error occurred during processing: {e}")
